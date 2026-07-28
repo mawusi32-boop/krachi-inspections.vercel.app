@@ -8,6 +8,8 @@ import {
   Trash2, Download, Check, ChevronDown, ChevronUp, AlertTriangle, Bug,
   Users, RotateCcw, Save, X
 } from 'lucide-react';
+import { db } from './firebase';
+import { collection, onSnapshot, doc, setDoc, deleteDoc, query, orderBy } from 'firebase/firestore';
 
 // ---------- Reference data (Krachi Nchumuru District, Oti Region) ----------
 const COMMUNITIES = ['Chinderi', 'Banda', 'Borae', 'Bejamse', 'Akaniem', 'Anyinamae', 'Chayo', 'Grubi', 'Other'];
@@ -125,34 +127,32 @@ export default function App() {
   const [expanded, setExpanded] = useState(null);
   const [confirmReset, setConfirmReset] = useState(false);
 
-  // Load saved inspection data + officer name from this browser's local storage
+  // Listen live to the shared Firestore database, updates instantly for every officer
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      setInspections(raw ? JSON.parse(raw) : []);
-    } catch (e) {
-      setInspections([]);
-    }
+    const q = query(collection(db, 'inspections'), orderBy('savedAt', 'desc'));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        setInspections(snapshot.docs.map((d) => d.data()));
+        setLoading(false);
+      },
+      (err) => {
+        setLoadError(true);
+        setLoading(false);
+      }
+    );
+    // officer name stays personal to this device
     try {
       const me = localStorage.getItem(OFFICER_KEY);
       if (me) setOfficerName(me);
     } catch (e) { /* no saved name yet */ }
-    setLoading(false);
+    return () => unsubscribe();
   }, []);
 
   const showToast = (msg) => {
     setToast(msg);
     setTimeout(() => setToast(''), 2600);
   };
-
-  const persist = useCallback((next) => {
-    setInspections(next);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    } catch (e) {
-      setLoadError(true);
-    }
-  }, []);
 
   const saveOfficerName = (name) => {
     setOfficerName(name);
@@ -177,26 +177,23 @@ export default function App() {
     const record = { ...form, community, officer: officerName || 'Unassigned', savedAt: new Date().toISOString() };
     if (!record.id) record.id = uid();
 
-    // Always read the freshest copy from storage first, so we never overwrite
-    // records that were saved after this page last loaded.
-    let current = inspections;
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      current = raw ? JSON.parse(raw) : [];
-    } catch (e) { /* fall back to in-memory list */ }
-
-    const next = current.some((i) => i.id === record.id)
-      ? current.map((i) => (i.id === record.id ? record : i))
-      : [record, ...current];
-    persist(next);
-    showToast(`Inspection ${record.id} saved.`);
-    resetForm();
-    setTab('records');
+      await setDoc(doc(db, 'inspections', record.id), record);
+      showToast(`Inspection ${record.id} saved.`);
+      resetForm();
+      setTab('records');
+    } catch (e) {
+      setFormError('Could not save to the shared database. Check your internet connection and try again.');
+    }
   };
 
   const deleteInspection = async (id) => {
-    await persist(inspections.filter((i) => i.id !== id));
-    showToast('Record deleted.');
+    try {
+      await deleteDoc(doc(db, 'inspections', id));
+      showToast('Record deleted.');
+    } catch (e) {
+      showToast('Could not delete, check your internet connection.');
+    }
   };
 
   const editInspection = (rec) => {
@@ -205,9 +202,13 @@ export default function App() {
   };
 
   const resetAll = async () => {
-    await persist([]);
-    setConfirmReset(false);
-    showToast('All records cleared.');
+    try {
+      await Promise.all(inspections.map((r) => deleteDoc(doc(db, 'inspections', r.id))));
+      setConfirmReset(false);
+      showToast('All records cleared.');
+    } catch (e) {
+      showToast('Could not clear records, check your internet connection.');
+    }
   };
 
   // ---------- Derived data ----------
@@ -872,7 +873,7 @@ function FieldGuide({ onReset, confirmReset, onConfirm, onCancelReset }) {
       </div>
       <div className="guide-block">
         <h4>Data & Storage</h4>
-        <p>Inspection records saved in this app are shared across everyone using it, so the district team can review the same register together. Your officer name field is saved only on this device.</p>
+        <p>Inspection records are saved to a shared online database, so every officer sees the same live register updating in real time, no matter whose phone made the entry. Your officer name field is saved only on this device.</p>
       </div>
       <div className="guide-block">
         <h4>Reset Register</h4>
