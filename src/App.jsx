@@ -39,6 +39,23 @@ const STAMP_COLORS = {
   'Major non-compliance': '#9C3B2E',
 };
 
+// Inspection categories beyond the original house-to-house checklist
+const INSPECTION_TYPES = ['Household', 'Food Vendor', 'Hotel/Guest House', 'Vendor Medical Screening', 'Industry', 'School'];
+const FOOD_STORAGE_OPTIONS = ['Covered & elevated', 'Refrigerated', 'Covered, ground level', 'Exposed/uncovered'];
+const EFFLUENT_DISPOSAL_OPTIONS = ['Treated before discharge', 'Municipal sewer connection', 'Soakaway/on-site pit', 'Discharged untreated', 'Other'];
+const FOOD_TYPES_SOLD = ['Cooked food/chop bar', 'Raw meat/fish', 'Fruits & vegetables', 'Packaged/dry goods', 'Beverages/sachet water', 'Mixed/other'];
+const INDUSTRY_TYPES = ['Food processing', 'Agro-processing', 'Timber/sawmill', 'Quarry/mining-related', 'Manufacturing/light industry', 'Other'];
+
+const TYPE_LABELS = {
+  'Household': { subject: 'Head of household', premise: 'House / compound number' },
+  'Food Vendor': { subject: 'Vendor / business name', premise: 'Stall / shop number' },
+  'Hotel/Guest House': { subject: 'Establishment name', premise: 'Premise number' },
+  'Vendor Medical Screening': { subject: 'Vendor / trader name', premise: 'Market stall / ID number' },
+  'Industry': { subject: 'Company / industry name', premise: 'Facility number' },
+  'School': { subject: 'School name', premise: 'GES/School ID number' },
+};
+
+
 const STORAGE_KEY = 'inspections';
 const OFFICER_KEY = 'current-officer-name';
 
@@ -47,21 +64,54 @@ const uid = () => `KN-${Date.now().toString(36).toUpperCase()}${Math.random().to
 function emptyForm() {
   return {
     id: null,
+    inspectionType: 'Household',
     date: new Date().toISOString().slice(0, 10),
     community: '',
     communityOther: '',
     houseId: '',
     gpsNote: '',
+    // Household
     headOfHousehold: '',
     householdSize: '',
     dwellingType: '',
-    waterSource: '',
     toiletFacility: '',
-    wasteDisposal: '',
     refuseContainer: '',
     compoundCleanliness: '',
     overcrowding: '',
     ventilation: '',
+    // Shared across most non-household types
+    premiseName: '',
+    waterSource: '',
+    wasteDisposal: '',
+    // Food Vendor
+    foodTypeSold: '',
+    foodHandlerCert: '',
+    certExpiry: '',
+    handwashFacility: '',
+    foodStorage: '',
+    // Hotel / Guest House
+    numRooms: '',
+    toiletRatioAdequate: '',
+    fireSafety: '',
+    beddingHygiene: '',
+    // Vendor Medical Screening
+    occupationTrade: '',
+    medicalCertPresent: '',
+    certIssuingFacility: '',
+    screenedCommunicable: '',
+    fitForPublicContact: '',
+    // Industry
+    industryType: '',
+    epaPermit: '',
+    effluentDisposal: '',
+    airEmissionControl: '',
+    workersWelfare: '',
+    hazardousWasteStorage: '',
+    // School
+    numPupils: '',
+    pupilToiletRatio: '',
+    canteenPresent: '',
+    // Common
     vectorFlags: [],
     violations: '',
     complianceStatus: '',
@@ -69,6 +119,12 @@ function emptyForm() {
     followUpDate: '',
     notes: '',
   };
+}
+
+// The "subject" is whoever/whatever the inspection is about — a household head
+// for house-to-house visits, or the business/institution name for everything else.
+function subjectNameOf(form) {
+  return form.inspectionType === 'Household' ? form.headOfHousehold : form.premiseName;
 }
 
 function fmtDate(iso) {
@@ -169,8 +225,9 @@ export default function App() {
 
   const submitInspection = async () => {
     const community = form.community === 'Other' ? form.communityOther.trim() : form.community;
-    if (!community || !form.houseId.trim() || !form.headOfHousehold.trim() || !form.complianceStatus) {
-      setFormError('Please fill in community, house/compound ID, head of household, and compliance status before saving.');
+    const subjectName = subjectNameOf(form).trim();
+    if (!community || !form.houseId.trim() || !subjectName || !form.complianceStatus) {
+      setFormError('Please fill in community, ID number, name, and compliance status before saving.');
       return;
     }
     setFormError('');
@@ -197,7 +254,13 @@ export default function App() {
   };
 
   const editInspection = (rec) => {
-    setForm({ ...rec, communityOther: COMMUNITIES.includes(rec.community) ? '' : rec.community, community: COMMUNITIES.includes(rec.community) ? rec.community : 'Other' });
+    setForm({
+      ...emptyForm(),
+      ...rec,
+      inspectionType: rec.inspectionType || 'Household',
+      communityOther: COMMUNITIES.includes(rec.community) ? '' : rec.community,
+      community: COMMUNITIES.includes(rec.community) ? rec.community : 'Other',
+    });
     setTab('new');
   };
 
@@ -232,6 +295,9 @@ export default function App() {
     const byCommunity = COMMUNITIES.filter((c) => c !== 'Other').map((c) => ({
       name: c, count: inspections.filter((i) => i.community === c).length,
     })).filter((d) => d.count > 0);
+    const byType = INSPECTION_TYPES.map((t) => ({
+      name: t, count: inspections.filter((i) => (i.inspectionType || 'Household') === t).length,
+    })).filter((d) => d.count > 0);
     const vectorTally = {};
     inspections.forEach((i) => (i.vectorFlags || []).forEach((f) => { vectorTally[f] = (vectorTally[f] || 0) + 1; }));
     const violationChart = Object.entries(vectorTally).map(([name, count]) => ({
@@ -242,14 +308,14 @@ export default function App() {
       { name: 'Minor non-compliance', value: minor },
       { name: 'Major non-compliance', value: major },
     ].filter((d) => d.value > 0);
-    return { total, compliant, minor, major, byCommunity, violationChart, pieData };
+    return { total, compliant, minor, major, byCommunity, byType, violationChart, pieData };
   }, [inspections]);
 
   const exportCsv = () => {
-    const headers = ['ID', 'Date', 'Officer', 'Community', 'House/Compound ID', 'Head of Household', 'Household Size', 'Water Source', 'Toilet Facility', 'Waste Disposal', 'Compound Cleanliness', 'Vector Flags', 'Compliance Status', 'Action Taken', 'Follow-up Date', 'Notes'];
+    const headers = ['ID', 'Date', 'Officer', 'Inspection Type', 'Community', 'ID Number', 'Name/Subject', 'Water Source', 'Waste Disposal', 'Vector Flags', 'Compliance Status', 'Action Taken', 'Follow-up Date', 'Notes'];
     const rows = inspections.map((r) => [
-      r.id, r.date, r.officer, r.community, r.houseId, r.headOfHousehold, r.householdSize,
-      r.waterSource, r.toiletFacility, r.wasteDisposal, r.compoundCleanliness,
+      r.id, r.date, r.officer, r.inspectionType || 'Household', r.community, r.houseId, subjectNameOf(r),
+      r.waterSource, r.wasteDisposal,
       (r.vectorFlags || []).join('; '), r.complianceStatus, r.actionTaken, r.followUpDate || '', (r.notes || '').replace(/\n/g, ' '),
     ]);
     const csv = [headers, ...rows].map((row) => row.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -501,6 +567,17 @@ export default function App() {
         }
         .stamp-md { font-size: 0.68rem; }
         .stamp-sm { font-size: 0.6rem; padding: 2px 7px; }
+        .type-badge {
+          display: inline-block;
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 0.65rem;
+          text-transform: uppercase;
+          letter-spacing: 0.04em;
+          color: var(--ink-soft);
+          background: rgba(31,61,43,0.08);
+          padding: 2px 7px;
+          border-radius: 4px;
+        }
 
         .filter-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
         .filter-row select, .filter-row input {
@@ -608,6 +685,21 @@ function Dashboard({ stats, total }) {
         </div>
       )}
 
+      {stats.byType.length > 0 && (
+        <div className="chart-card">
+          <h4>Inspections by Type</h4>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={stats.byType}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#C7BC9C" />
+              <XAxis dataKey="name" tick={{ fontSize: 9 }} interval={0} angle={-20} textAnchor="end" height={60} />
+              <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+              <Tooltip />
+              <Bar dataKey="count" fill="#4A6650" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
       {stats.pieData.length > 0 && (
         <div className="chart-card">
           <h4>Compliance Breakdown</h4>
@@ -645,11 +737,29 @@ function Dashboard({ stats, total }) {
 
 // ---------- New Inspection Form ----------
 function InspectionForm({ form, updateForm, toggleVector, onSave, onCancel, error }) {
+  const type = form.inspectionType;
+  const labels = TYPE_LABELS[type];
+  const showVectorSection = type !== 'Vendor Medical Screening';
+
   return (
     <div>
       {error && <div className="form-error"><AlertTriangle size={16} /> {error}</div>}
 
-      <Section n="1" title="Visit Information" icon={MapPin}>
+      <Section n="1" title="Inspection Type" icon={ClipboardList}>
+        <div className="radio-pills">
+          {INSPECTION_TYPES.map((t) => (
+            <div
+              key={t}
+              className={`pill ${type === t ? 'selected Compliant' : ''}`}
+              onClick={() => updateForm({ inspectionType: t })}
+            >
+              {t}
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      <Section n="2" title="Visit Information" icon={MapPin}>
         <Field label="Date of visit" required>
           <input type="date" value={form.date} onChange={(e) => updateForm({ date: e.target.value })} />
         </Field>
@@ -664,7 +774,7 @@ function InspectionForm({ form, updateForm, toggleVector, onSave, onCancel, erro
             <input value={form.communityOther} onChange={(e) => updateForm({ communityOther: e.target.value })} />
           </Field>
         )}
-        <Field label="House / compound number" required>
+        <Field label={labels.premise} required>
           <input placeholder="e.g. Plot 14, Zongo Line" value={form.houseId} onChange={(e) => updateForm({ houseId: e.target.value })} />
         </Field>
         <Field label="GPS / landmark note">
@@ -672,84 +782,315 @@ function InspectionForm({ form, updateForm, toggleVector, onSave, onCancel, erro
         </Field>
       </Section>
 
-      <Section n="2" title="Household Information" icon={Users}>
-        <Field label="Head of household" required>
-          <input value={form.headOfHousehold} onChange={(e) => updateForm({ headOfHousehold: e.target.value })} />
-        </Field>
-        <Field label="Household size">
-          <input type="number" min="0" value={form.householdSize} onChange={(e) => updateForm({ householdSize: e.target.value })} />
-        </Field>
-        <Field label="Dwelling type">
-          <select value={form.dwellingType} onChange={(e) => updateForm({ dwellingType: e.target.value })}>
-            <option value="">Select…</option>
-            {DWELLING_TYPES.map((d) => <option key={d} value={d}>{d}</option>)}
-          </select>
-        </Field>
-      </Section>
+      {type === 'Household' && (
+        <>
+          <Section n="3" title="Household Information" icon={Users}>
+            <Field label="Head of household" required>
+              <input value={form.headOfHousehold} onChange={(e) => updateForm({ headOfHousehold: e.target.value })} />
+            </Field>
+            <Field label="Household size">
+              <input type="number" min="0" value={form.householdSize} onChange={(e) => updateForm({ householdSize: e.target.value })} />
+            </Field>
+            <Field label="Dwelling type">
+              <select value={form.dwellingType} onChange={(e) => updateForm({ dwellingType: e.target.value })}>
+                <option value="">Select…</option>
+                {DWELLING_TYPES.map((d) => <option key={d} value={d}>{d}</option>)}
+              </select>
+            </Field>
+          </Section>
 
-      <Section n="3" title="Water & Sanitation" icon={Droplet}>
-        <Field label="Main water source">
-          <select value={form.waterSource} onChange={(e) => updateForm({ waterSource: e.target.value })}>
-            <option value="">Select…</option>
-            {WATER_SOURCES.map((w) => <option key={w} value={w}>{w}</option>)}
-          </select>
-        </Field>
-        <Field label="Toilet facility">
-          <select value={form.toiletFacility} onChange={(e) => updateForm({ toiletFacility: e.target.value })}>
-            <option value="">Select…</option>
-            {TOILET_FACILITIES.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </Field>
-        <Field label="Solid waste disposal method">
-          <select value={form.wasteDisposal} onChange={(e) => updateForm({ wasteDisposal: e.target.value })}>
-            <option value="">Select…</option>
-            {WASTE_DISPOSAL.map((w) => <option key={w} value={w}>{w}</option>)}
-          </select>
-        </Field>
-        <Field label="Refuse container present">
-          <select value={form.refuseContainer} onChange={(e) => updateForm({ refuseContainer: e.target.value })}>
-            <option value="">Select…</option>
-            <option value="Yes">Yes</option>
-            <option value="No">No</option>
-          </select>
-        </Field>
-      </Section>
+          <Section n="4" title="Water & Sanitation" icon={Droplet}>
+            <Field label="Main water source">
+              <select value={form.waterSource} onChange={(e) => updateForm({ waterSource: e.target.value })}>
+                <option value="">Select…</option>
+                {WATER_SOURCES.map((w) => <option key={w} value={w}>{w}</option>)}
+              </select>
+            </Field>
+            <Field label="Toilet facility">
+              <select value={form.toiletFacility} onChange={(e) => updateForm({ toiletFacility: e.target.value })}>
+                <option value="">Select…</option>
+                {TOILET_FACILITIES.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </Field>
+            <Field label="Solid waste disposal method">
+              <select value={form.wasteDisposal} onChange={(e) => updateForm({ wasteDisposal: e.target.value })}>
+                <option value="">Select…</option>
+                {WASTE_DISPOSAL.map((w) => <option key={w} value={w}>{w}</option>)}
+              </select>
+            </Field>
+            <Field label="Refuse container present">
+              <select value={form.refuseContainer} onChange={(e) => updateForm({ refuseContainer: e.target.value })}>
+                <option value="">Select…</option>
+                <option value="Yes">Yes</option>
+                <option value="No">No</option>
+              </select>
+            </Field>
+          </Section>
 
-      <Section n="4" title="Compound & Structural Observation" icon={Home}>
-        <Field label="Compound cleanliness">
-          <select value={form.compoundCleanliness} onChange={(e) => updateForm({ compoundCleanliness: e.target.value })}>
-            <option value="">Select…</option>
-            {COMPOUND_CLEANLINESS.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </Field>
-        <Field label="Overcrowding observed">
-          <select value={form.overcrowding} onChange={(e) => updateForm({ overcrowding: e.target.value })}>
-            <option value="">Select…</option>
-            <option value="Yes">Yes</option>
-            <option value="No">No</option>
-          </select>
-        </Field>
-        <Field label="Ventilation adequate">
-          <select value={form.ventilation} onChange={(e) => updateForm({ ventilation: e.target.value })}>
-            <option value="">Select…</option>
-            <option value="Yes">Yes</option>
-            <option value="No">No</option>
-          </select>
-        </Field>
-      </Section>
+          <Section n="5" title="Compound & Structural Observation" icon={Home}>
+            <Field label="Compound cleanliness">
+              <select value={form.compoundCleanliness} onChange={(e) => updateForm({ compoundCleanliness: e.target.value })}>
+                <option value="">Select…</option>
+                {COMPOUND_CLEANLINESS.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </Field>
+            <Field label="Overcrowding observed">
+              <select value={form.overcrowding} onChange={(e) => updateForm({ overcrowding: e.target.value })}>
+                <option value="">Select…</option>
+                <option value="Yes">Yes</option>
+                <option value="No">No</option>
+              </select>
+            </Field>
+            <Field label="Ventilation adequate">
+              <select value={form.ventilation} onChange={(e) => updateForm({ ventilation: e.target.value })}>
+                <option value="">Select…</option>
+                <option value="Yes">Yes</option>
+                <option value="No">No</option>
+              </select>
+            </Field>
+          </Section>
+        </>
+      )}
 
-      <Section n="5" title="Vector & Pest Observations" icon={Bug}>
-        <div className="checkbox-grid">
-          {VECTOR_FLAGS.map((flag) => (
-            <label key={flag} className="checkbox-row">
-              <input type="checkbox" checked={form.vectorFlags.includes(flag)} onChange={() => toggleVector(flag)} />
-              {flag}
-            </label>
-          ))}
-        </div>
-      </Section>
+      {type === 'Food Vendor' && (
+        <Section n="3" title="Food Vendor Details" icon={Users}>
+          <Field label="Vendor / business name" required>
+            <input value={form.premiseName} onChange={(e) => updateForm({ premiseName: e.target.value })} />
+          </Field>
+          <Field label="Type of food sold">
+            <select value={form.foodTypeSold} onChange={(e) => updateForm({ foodTypeSold: e.target.value })}>
+              <option value="">Select…</option>
+              {FOOD_TYPES_SOLD.map((f) => <option key={f} value={f}>{f}</option>)}
+            </select>
+          </Field>
+          <Field label="Food handler's medical certificate">
+            <select value={form.foodHandlerCert} onChange={(e) => updateForm({ foodHandlerCert: e.target.value })}>
+              <option value="">Select…</option>
+              <option value="Yes">Yes, valid</option>
+              <option value="Expired">Present but expired</option>
+              <option value="No">No certificate</option>
+            </select>
+          </Field>
+          <Field label="Certificate expiry date">
+            <input type="date" value={form.certExpiry} onChange={(e) => updateForm({ certExpiry: e.target.value })} />
+          </Field>
+          <Field label="Handwashing facility present">
+            <select value={form.handwashFacility} onChange={(e) => updateForm({ handwashFacility: e.target.value })}>
+              <option value="">Select…</option>
+              <option value="Yes">Yes</option>
+              <option value="No">No</option>
+            </select>
+          </Field>
+          <Field label="Water source">
+            <select value={form.waterSource} onChange={(e) => updateForm({ waterSource: e.target.value })}>
+              <option value="">Select…</option>
+              {WATER_SOURCES.map((w) => <option key={w} value={w}>{w}</option>)}
+            </select>
+          </Field>
+          <Field label="Food storage practice">
+            <select value={form.foodStorage} onChange={(e) => updateForm({ foodStorage: e.target.value })}>
+              <option value="">Select…</option>
+              {FOOD_STORAGE_OPTIONS.map((f) => <option key={f} value={f}>{f}</option>)}
+            </select>
+          </Field>
+          <Field label="Waste disposal method">
+            <select value={form.wasteDisposal} onChange={(e) => updateForm({ wasteDisposal: e.target.value })}>
+              <option value="">Select…</option>
+              {WASTE_DISPOSAL.map((w) => <option key={w} value={w}>{w}</option>)}
+            </select>
+          </Field>
+        </Section>
+      )}
 
-      <Section n="6" title="Findings & Compliance" icon={ClipboardList}>
+      {type === 'Hotel/Guest House' && (
+        <Section n="3" title="Establishment Details" icon={Home}>
+          <Field label="Establishment name" required>
+            <input value={form.premiseName} onChange={(e) => updateForm({ premiseName: e.target.value })} />
+          </Field>
+          <Field label="Number of rooms">
+            <input type="number" min="0" value={form.numRooms} onChange={(e) => updateForm({ numRooms: e.target.value })} />
+          </Field>
+          <Field label="Water source">
+            <select value={form.waterSource} onChange={(e) => updateForm({ waterSource: e.target.value })}>
+              <option value="">Select…</option>
+              {WATER_SOURCES.map((w) => <option key={w} value={w}>{w}</option>)}
+            </select>
+          </Field>
+          <Field label="Toilet-to-room ratio adequate">
+            <select value={form.toiletRatioAdequate} onChange={(e) => updateForm({ toiletRatioAdequate: e.target.value })}>
+              <option value="">Select…</option>
+              <option value="Yes">Yes</option>
+              <option value="No">No</option>
+            </select>
+          </Field>
+          <Field label="Waste disposal method">
+            <select value={form.wasteDisposal} onChange={(e) => updateForm({ wasteDisposal: e.target.value })}>
+              <option value="">Select…</option>
+              {WASTE_DISPOSAL.map((w) => <option key={w} value={w}>{w}</option>)}
+            </select>
+          </Field>
+          <Field label="Fire safety equipment present">
+            <select value={form.fireSafety} onChange={(e) => updateForm({ fireSafety: e.target.value })}>
+              <option value="">Select…</option>
+              <option value="Yes">Yes</option>
+              <option value="No">No</option>
+            </select>
+          </Field>
+          <Field label="Bedding / linen hygiene">
+            <select value={form.beddingHygiene} onChange={(e) => updateForm({ beddingHygiene: e.target.value })}>
+              <option value="">Select…</option>
+              {COMPOUND_CLEANLINESS.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </Field>
+        </Section>
+      )}
+
+      {type === 'Vendor Medical Screening' && (
+        <Section n="3" title="Screening Details" icon={Users}>
+          <Field label="Vendor / trader name" required>
+            <input value={form.premiseName} onChange={(e) => updateForm({ premiseName: e.target.value })} />
+          </Field>
+          <Field label="Occupation / trade">
+            <input placeholder="e.g. Cooked food seller" value={form.occupationTrade} onChange={(e) => updateForm({ occupationTrade: e.target.value })} />
+          </Field>
+          <Field label="Medical certificate present">
+            <select value={form.medicalCertPresent} onChange={(e) => updateForm({ medicalCertPresent: e.target.value })}>
+              <option value="">Select…</option>
+              <option value="Yes">Yes, valid</option>
+              <option value="Expired">Present but expired</option>
+              <option value="No">No certificate</option>
+            </select>
+          </Field>
+          <Field label="Certificate issuing facility">
+            <input value={form.certIssuingFacility} onChange={(e) => updateForm({ certIssuingFacility: e.target.value })} />
+          </Field>
+          <Field label="Certificate expiry date">
+            <input type="date" value={form.certExpiry} onChange={(e) => updateForm({ certExpiry: e.target.value })} />
+          </Field>
+          <Field label="Screened for communicable disease">
+            <select value={form.screenedCommunicable} onChange={(e) => updateForm({ screenedCommunicable: e.target.value })}>
+              <option value="">Select…</option>
+              <option value="Yes">Yes</option>
+              <option value="No">No</option>
+            </select>
+          </Field>
+          <Field label="Fit for public contact">
+            <select value={form.fitForPublicContact} onChange={(e) => updateForm({ fitForPublicContact: e.target.value })}>
+              <option value="">Select…</option>
+              <option value="Yes">Yes</option>
+              <option value="No">No</option>
+            </select>
+          </Field>
+        </Section>
+      )}
+
+      {type === 'Industry' && (
+        <Section n="3" title="Industry Details" icon={Home}>
+          <Field label="Company / industry name" required>
+            <input value={form.premiseName} onChange={(e) => updateForm({ premiseName: e.target.value })} />
+          </Field>
+          <Field label="Type of industry">
+            <select value={form.industryType} onChange={(e) => updateForm({ industryType: e.target.value })}>
+              <option value="">Select…</option>
+              {INDUSTRY_TYPES.map((i) => <option key={i} value={i}>{i}</option>)}
+            </select>
+          </Field>
+          <Field label="EPA permit present">
+            <select value={form.epaPermit} onChange={(e) => updateForm({ epaPermit: e.target.value })}>
+              <option value="">Select…</option>
+              <option value="Yes">Yes</option>
+              <option value="No">No</option>
+            </select>
+          </Field>
+          <Field label="Effluent / liquid waste disposal">
+            <select value={form.effluentDisposal} onChange={(e) => updateForm({ effluentDisposal: e.target.value })}>
+              <option value="">Select…</option>
+              {EFFLUENT_DISPOSAL_OPTIONS.map((e2) => <option key={e2} value={e2}>{e2}</option>)}
+            </select>
+          </Field>
+          <Field label="Air emission control present">
+            <select value={form.airEmissionControl} onChange={(e) => updateForm({ airEmissionControl: e.target.value })}>
+              <option value="">Select…</option>
+              <option value="Yes">Yes</option>
+              <option value="No">No</option>
+            </select>
+          </Field>
+          <Field label="Workers' welfare facilities adequate">
+            <select value={form.workersWelfare} onChange={(e) => updateForm({ workersWelfare: e.target.value })}>
+              <option value="">Select…</option>
+              <option value="Yes">Yes</option>
+              <option value="No">No</option>
+            </select>
+          </Field>
+          <Field label="Hazardous waste properly stored">
+            <select value={form.hazardousWasteStorage} onChange={(e) => updateForm({ hazardousWasteStorage: e.target.value })}>
+              <option value="">Select…</option>
+              <option value="Yes">Yes</option>
+              <option value="No">No</option>
+              <option value="N/A">Not applicable</option>
+            </select>
+          </Field>
+        </Section>
+      )}
+
+      {type === 'School' && (
+        <Section n="3" title="School Details" icon={Home}>
+          <Field label="School name" required>
+            <input value={form.premiseName} onChange={(e) => updateForm({ premiseName: e.target.value })} />
+          </Field>
+          <Field label="Number of pupils">
+            <input type="number" min="0" value={form.numPupils} onChange={(e) => updateForm({ numPupils: e.target.value })} />
+          </Field>
+          <Field label="Water source">
+            <select value={form.waterSource} onChange={(e) => updateForm({ waterSource: e.target.value })}>
+              <option value="">Select…</option>
+              {WATER_SOURCES.map((w) => <option key={w} value={w}>{w}</option>)}
+            </select>
+          </Field>
+          <Field label="Pupil-to-toilet ratio adequate">
+            <select value={form.pupilToiletRatio} onChange={(e) => updateForm({ pupilToiletRatio: e.target.value })}>
+              <option value="">Select…</option>
+              <option value="Yes">Yes</option>
+              <option value="No">No</option>
+            </select>
+          </Field>
+          <Field label="Handwashing facilities present">
+            <select value={form.handwashFacility} onChange={(e) => updateForm({ handwashFacility: e.target.value })}>
+              <option value="">Select…</option>
+              <option value="Yes">Yes</option>
+              <option value="No">No</option>
+            </select>
+          </Field>
+          <Field label="Waste disposal method">
+            <select value={form.wasteDisposal} onChange={(e) => updateForm({ wasteDisposal: e.target.value })}>
+              <option value="">Select…</option>
+              {WASTE_DISPOSAL.map((w) => <option key={w} value={w}>{w}</option>)}
+            </select>
+          </Field>
+          <Field label="Canteen / food service present">
+            <select value={form.canteenPresent} onChange={(e) => updateForm({ canteenPresent: e.target.value })}>
+              <option value="">Select…</option>
+              <option value="Yes">Yes</option>
+              <option value="No">No</option>
+            </select>
+          </Field>
+        </Section>
+      )}
+
+      {showVectorSection && (
+        <Section n="4" title="Vector & Pest Observations" icon={Bug}>
+          <div className="checkbox-grid">
+            {VECTOR_FLAGS.map((flag) => (
+              <label key={flag} className="checkbox-row">
+                <input type="checkbox" checked={form.vectorFlags.includes(flag)} onChange={() => toggleVector(flag)} />
+                {flag}
+              </label>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      <Section n="5" title="Findings & Compliance" icon={ClipboardList}>
         <Field label="Violations / issues identified" required>
           <textarea placeholder="Describe specific breaches observed…" value={form.violations} onChange={(e) => updateForm({ violations: e.target.value })} />
         </Field>
@@ -815,8 +1156,11 @@ function Records({ records, allCount, search, setSearch, filterCommunity, setFil
           <div key={r.id} className="record-row">
             <div className="record-summary" onClick={() => setExpanded(expanded === r.id ? null : r.id)}>
               <div className="left">
-                <span className="name">{r.headOfHousehold} — {r.community}</span>
-                <span className="house">{r.houseId} · {fmtDate(r.date)}</span>
+                <span className="name">{subjectNameOf(r) || 'Unnamed'} — {r.community}</span>
+                <span className="house">
+                  <span className="type-badge">{r.inspectionType || 'Household'}</span>
+                  {' '}{r.houseId} · {fmtDate(r.date)}
+                </span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Stamp status={r.complianceStatus} size="sm" />
@@ -827,11 +1171,8 @@ function Records({ records, allCount, search, setSearch, filterCommunity, setFil
               <div className="record-detail">
                 <dl>
                   <dt>Officer</dt><dd>{r.officer || '—'}</dd>
-                  <dt>Household size</dt><dd>{r.householdSize || '—'}</dd>
                   <dt>Water source</dt><dd>{r.waterSource || '—'}</dd>
-                  <dt>Toilet facility</dt><dd>{r.toiletFacility || '—'}</dd>
                   <dt>Waste disposal</dt><dd>{r.wasteDisposal || '—'}</dd>
-                  <dt>Compound cleanliness</dt><dd>{r.compoundCleanliness || '—'}</dd>
                   <dt>Vector flags</dt><dd>{(r.vectorFlags || []).length ? r.vectorFlags.join(', ') : 'None observed'}</dd>
                   <dt>Action taken</dt><dd>{r.actionTaken || '—'}</dd>
                   <dt>Follow-up date</dt><dd>{r.followUpDate ? fmtDate(r.followUpDate) : '—'}</dd>
@@ -856,6 +1197,10 @@ function Records({ records, allCount, search, setSearch, filterCommunity, setFil
 function FieldGuide({ onReset, confirmReset, onConfirm, onCancelReset }) {
   return (
     <div>
+      <div className="guide-block">
+        <h4>Inspection Categories</h4>
+        <p>This register now covers six categories: house-to-house household visits, food vendors, hotels/guest houses, vendor medical screening, industries, and schools. Select the category at the top of the New Inspection form, the checklist below it adjusts automatically.</p>
+      </div>
       <div className="guide-block">
         <h4>Legal & Policy Basis</h4>
         <ul>
